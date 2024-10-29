@@ -3,8 +3,18 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+function MapCSharpClass(C = '') {
+  const regex = /public\s+([\w?]+)\s+(\w+)\s*{\s*get;\s*set;\s*}/g;
+  const matches = [...C.matchAll(regex)];
+
+  return matches.map(match => ({
+    type: match[1].trim(),
+    name: match[2].trim()
+  }));
+}
+
 export const generateLookup = (fileName, propName) => {
-    `import { Reactive } from '@livefree/reactive';
+  `import { Reactive } from '@livefree/reactive';
 import { Select } from '@livefree/react-ui';
 import { SelectItem, Spinner } from '@nextui-org/react';
 
@@ -65,26 +75,23 @@ export const ${fileName}sLookup = Reactive(_${fileName}sLookup, {
 
 `
 }
+const convertFirstLetterToLowerCase = (word) => {
+  return word.charAt(0).toLowerCase() + word.slice(1);
+}
+
 export const generateList = (fileName, propName, props) => {
 
-    const names = props.split(",");
-    const mapToColumns = (array) => {
-        return array.map(item => ({
-            propertyName: item,
-            name: formatName(item),
-            isSortable: true
-        }));
-    }
+  const mapToColumns = (array) => {
+    return array?.map(item => ({
+      propertyName: convertFirstLetterToLowerCase(item?.name),
+      name: convertFirstLetterToLowerCase(item?.name),
+      isSortable: true
+    }));
+  }
 
-    const formatName = (propertyName) => {
-        return propertyName
-            .replace(/([a-z])([A-Z])/g, '$1 $2')
-            .replace(/^./, str => str.toUpperCase());
-    }
-
-    const columns = mapToColumns(names);
-    return (
-        `
+  const columns = mapToColumns(props);
+  return (
+    `
 import { useCallback } from 'react';
 import { TableColumn, TableRow, TableCell } from '@nextui-org/react';
 import { RequestBrokerDataTable } from '@livefree/react-ui';
@@ -96,9 +103,6 @@ export const ${fileName}sList = ({ ${propName}s = [], onSelect, filters }) => {
     const cellValue = row[columnKey];
 
     switch (columnKey) {
-      case 'enabled':
-      case 'nonEditable':
-        return cellValue ? <i className="ri-lock-line"></i> : null;
       default:
         return cellValue;
     }
@@ -143,8 +147,8 @@ export const with${fileName} = (Component) => (props) => {
 };
 `;
 
-export const generateListControllerTemplate = (fileName, propName, folderName) =>
-    `import { useCallback } from 'react';
+export const generateListControllerTemplateWithDelete = (fileName, propName, folderName) =>
+  `import { useCallback } from 'react';
 import { Reactive } from '@livefree/reactive';
 import { RequestBroker, queryDexieWithMetadata } from '@livefree/applications';
 import { FilterMethod, FilterType } from '@livefree/js-common/filters';
@@ -212,6 +216,68 @@ const ${propName}sFiltersDefinition = [
   }
 ];
 `
+export const generateListControllerTemplate = (fileName, propName, folderName) =>
+  `import { useCallback } from 'react';
+import { Reactive } from '@livefree/reactive';
+import { RequestBroker, queryDexieWithMetadata } from '@livefree/applications';
+import { FilterMethod, FilterType } from '@livefree/js-common/filters';
+import { ${fileName}sList } from 'features/${folderName}';
+import { useTranslation } from '@livefree/applications';
+
+export const _${fileName}sListController = ({ data, services, monitors, onSelect }) => {
+  const { ${propName}s } = data;
+  const [t] = useTranslation();
+
+  const handleExecute = useCallback((action, metadata) => {
+    action(metadata);
+  }, []);
+
+  return (
+    <RequestBroker
+      actionKey="get${fileName}s"
+      action={services.mql.get${fileName}s}
+      defaultPaging={{ skip: 0, take: 50, page: 1, totalCount: 0 }}
+      isExecuting={monitors.get${fileName}s.executing}
+      onExecute={handleExecute}
+    >
+      <${fileName}sList
+        ${propName}s={${propName}s}
+        filters={${propName}sFiltersDefinition(t)}
+        isLoading={monitors.get${fileName}s.executing}
+        onSelect={item => onSelect && onSelect(item)}
+      />
+    </RequestBroker>
+  );
+};
+
+export const ${fileName}sListController = Reactive(_${fileName}sListController, {
+  name: '${fileName}sListController',
+  queries: (_, services) => [
+    {
+      name: '${propName}s',
+      execute: db =>
+        queryDexieWithMetadata(db, services.mql.get${fileName}s.action, () => db.${propName}s, {
+          sorting: true,
+        }),
+    },
+  ],
+  monitors: services => [services.mql.get${fileName}s],
+});
+
+const ${propName}sFiltersDefinition = (t = word => word) => [
+  {
+    name: 'Name',
+    title: t('Name'),
+    typeSearch: FilterMethod.Contains,
+    isPlaced: true,
+    isShow: true,
+    render: {
+      type: FilterType.Input,
+      isClearable: true,
+    }
+  }
+];
+`
 export const generateUpdateController = (fileName, propName, folderName) => `import { useState } from 'react';
 import { Button } from '@nextui-org/react';
 import { Reactive } from '@livefree/reactive';
@@ -219,6 +285,7 @@ import { ${fileName}DetailsForm } from 'features/${folderName}';
 import { useReactorOnSuccess } from 'core/hooks';
 import { withModalController } from '@livefree/react-ui';
 import { with${fileName} } from 'features/${folderName}/utils';
+import { T } from '@livefree/applications';
 
 export const _${fileName}UpdateController = ({
   services,
@@ -229,6 +296,12 @@ export const _${fileName}UpdateController = ({
 }) => {
   const [form, setForm] = useState({});
 
+  const [deleteConfirmation, DeleteConfirmationModal] = useDialogDelete({
+    title: 'Delete ${fileName} Confirmation',
+    message: model => \`Confirm ${propName} \${model.firstName} to delete?\`,
+    onSuccess: ${propName} => services.${propName}s.delete${fileName}(${propName}.id),
+  });
+
   useReactorOnSuccess(services.${propName}s, 'update${fileName}', payload => {
     onSuccess && onSuccess(payload);
   });
@@ -236,7 +309,16 @@ export const _${fileName}UpdateController = ({
   return (
     <>
       <${fileName}DetailsForm onChange={setForm} ${propName}={${propName}} />
-      <div className="text-end pb-2">
+      <div className="flex flex-row gap-2 justify-end text-end pb-2">
+       <Button
+          size="sm"
+          color="danger"
+          onPress={() => {
+            deleteConfirmation.open(${propName});
+          }}
+        >
+          <T keyCode="Delete" />
+        </Button>
         <Button
           size="sm"
           color="primary"
@@ -245,11 +327,12 @@ export const _${fileName}UpdateController = ({
               ...form.data,
             })
           }
-          isDisabled={${propName}.nonEditable || !form.isValid}
+          isDisabled={!form.isValid}
           isLoading={monitors.update${fileName}.executing}
         >
-          Update
+         <T keyCode="Update" />
         </Button>
+        <DeleteConfirmationModal />
       </div>
     </>
   );
@@ -272,6 +355,7 @@ import { Reactive } from '@livefree/reactive';
 import { ${fileName}DetailsForm } from 'features/${folderName}';
 import { useReactorOnSuccess } from 'core/hooks';
 import { withModalController } from '@livefree/react-ui';
+import { T } from '@livefree/applications';
 
 export const _${fileName}CreateController = ({ services, monitors, onSuccess }) => {
   const [form, setForm] = useState({});
@@ -295,7 +379,7 @@ export const _${fileName}CreateController = ({ services, monitors, onSuccess }) 
           }
           isLoading={monitors.create${fileName}.executing}
         >
-          Create
+          <T keyCode="Create" />
         </Button>
       </div>
     </>
@@ -314,8 +398,8 @@ ${fileName}CreateController.Modal = withModalController(({ onSuccess, ...props }
 export { ${fileName}CreateController };`;
 
 export const generateProvider = (fileName, propName) => `import { createContext } from 'react';
-import { Spinner } from '@nextui-org/react';
 import { Reactive } from '@livefree/reactive';
+import { Spinner } from '@nextui-org/react';
 
 export const ${fileName}Context = createContext();
 
@@ -345,21 +429,21 @@ export const ${fileName}Provider = Reactive(_${fileName}Provider, {
       ]
 });`
 
-export const generateHOC = (fileName, propName) => `import React from 'react';
+export const generateHOC = (fileName, propName) => `import { createContext } from 'react';
 import { ${fileName}Context } from './${fileName}Provider';
 
 export const with${fileName} = Wrapper => {
   const _Wrapper = ({ ${propName}Id, ...props }) => {
-    const ${propName} = React.useContext(${fileName}Context);
+    const ${propName} = useContext(${fileName}Context);
 
-    if (!${propName} || !${propName}?.id || ${propName}?.id !== parseInt(${propName}Id))
+    if (!${propName} || !${propName}?.id || ${propName}?.id !== Number(${propName}Id))
       return (
         <>
           <p>
             <strong>Error</strong>
           </p>
           <p>
-            A component using <strong>with${fileName}</strong> must be wrapped with{' '}
+            A component using <strong>with${fileName}</strong> must be wrapped with
             <strong>${fileName}Provider</strong>.
           </p>
         </>
@@ -373,60 +457,45 @@ export const with${fileName} = Wrapper => {
 
 export const generateCreateView = (fileName, folderName) => `import { ${fileName}CreateController } from 'features/${folderName}/controllers';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from '@livefree/applications';
 
 export const ${fileName}CreateView = () => {
   const navigate = useNavigate();
+  const [t] = useTranslation();
 
   return (
     <${fileName}CreateController.Modal
       isOpen={true}
-      title={'Create ${fileName}'}
-      size="3xl"
+      title={t('Create ${fileName}')}
       onSuccess={() => navigate('/${folderName}')}
       onClose={() => navigate('/${folderName}')}
     />
   );
 };`;
 
-export const generateUpdateView = (fileName, folderName, propName) => `import { Chip } from '@nextui-org/react';
-import { ${fileName}UpdateController } from 'features/${folderName}/controllers';
-import { ${fileName}Provider, with${fileName} } from 'features/${folderName}/utils';
+export const generateUpdateView = (fileName, folderName, propName) => `import { ${fileName}UpdateController } from 'features/${folderName}/controllers';
+import { ${fileName}Provider } from 'features/${folderName}/utils';
 import { useNavigate } from 'react-router-dom';
-
-export const _${fileName}UpdateView = with${fileName}(({ ${propName}, ${propName}Id }) => {
-  const navigate = useNavigate();
-
-  const title = 'Update Api Resource';
-  return (
-    <${fileName}UpdateController.Modal
-      ${propName}Id={${propName}Id}
-      isDissmissable={false}
-      size="3xl"
-      isOpen={true}
-      title={
-        ${propName}.nonEditable ? (
-          <div className="flow">
-            <Chip color="danger">Non Editable</Chip> {title}
-          </div>
-        ) : (
-          title
-        )
-      }
-      onSuccess={() => navigate('/${folderName}')}
-      onClose={() => navigate('/${folderName}')}
-    />
-  );
-});
+import { useTranslation } from '@livefree/applications';
 
 export const ${fileName}UpdateView = ({ ${propName}Id }) => {
-  ${propName}Id = parseInt(${propName}Id);
+  ${propName}Id = Number(${propName}Id);
+  const navigate = useNavigate();
+  const [t] = useTranslation();
 
   return (
     <${fileName}Provider ${propName}Id={${propName}Id}>
-      <_${fileName}UpdateView ${propName}Id={${propName}Id} />
+      <${fileName}UpdateController.Modal
+        ${propName}Id={${propName}Id}
+        isDissmissable={false}
+        isOpen={true}
+        title={t('Update ${fileName}')}
+        onSuccess={() => navigate('/${folderName}')}
+        onClose={() => navigate('/${folderName}')}
+      />
     </${fileName}Provider>
   );
-};`;
+});`;
 
 export const generateListView = (fileName, folderName) => `import { Outlet, useNavigate } from 'react-router-dom';
 import { Breadcrumbs, BreadcrumbItem, Button } from '@nextui-org/react';
@@ -466,18 +535,14 @@ import { FieldStatus, TextField, Grid } from '@livefree/react-ui';
 export const ${fileName}DetailsForm = ({ ${propName}, onChange }) => {
   return (
     <Uniformly name="${propName}Form" onChange={onChange}>
-      <Grid cols={2} className="flex flex-row gap-3">
-        <Grid.Item colSpan={1} className="flex flex-col gap-y-2">
-          <FieldStatus required>
-            <TextField
-              name="name"
-              label="Name"
-              value={${propName}?.name}
-              validation={x => x.string().max(100).required('Name is required')}
-            />
-            </FieldStatus>
-        </Grid.Item>
-      </Grid>
+      <FieldStatus required>
+        <TextField
+          name="name"
+          label="Name"
+          value={${propName}?.name}
+          validation={x => x.string().max(100).required('Name is required')}
+        />
+      </FieldStatus>
     </Uniformly>
   );
 };`
@@ -490,7 +555,7 @@ import {
   ${fileName}UpdateView,
 } from 'features/${folderName}/views';
 
-export const ${fileName}Router = () => (
+export const ${fileName}sRouter = () => (
   <Routes>
     <Route path="/" element={<${fileName}sListView />}>
       <Route path="create" element={<${fileName}CreateView />} />
@@ -516,44 +581,44 @@ export const ${fileName}sReactor = ${fileName}sService.reactor('${propName}sReac
 
         switch (source) {
             case ${fileName}sService.get${fileName}:
-                return db.${propName}.put(payload);
+                return db.${propName}s.put(payload);
 
             case ${fileName}sService.create${fileName}:
                 services.alerts.actionSuccess(\`${fileName} added successfully\`, '${propName}', response);
 
-                return db.${propName}.add(payload);
+                return db.${propName}s.add(payload);
 
             case ${fileName}sService.update${fileName}:
                 services.alerts.actionSuccess(\`${fileName} updated successfully\`, '${propName}', response);
 
-                return db.${propName}.put(payload);
+                return db.${propName}s.put(payload);
 
             case ${fileName}sService.delete${fileName}:
                 services.alerts.actionSuccess(\`${fileName} deleted successfully\`, '${propName}', response);
 
-                return db.${propName}.delete(args[0]);
+                return db.${propName}s.delete(args[0]);
 
         }
     },
     error: (response, services) => {
-        switch (response.service) {
+        switch (response.source) {
             case ${fileName}sService.create${fileName}:
                 return services.alerts.actionError(
-                "Failed to create new ${propName}",
+                "Failed to create new ${fileName}",
                     '${propName}',
                     response,
                 );
 
             case ${fileName}sService.update${fileName}:
                 return services.alerts.actionError(
-                "Failed to create new ${propName}",
+                "Failed to create new ${fileName}",
                     '${propName}',
                     response,
                 );
 
             case ${fileName}sService.delete${fileName}:
                 return services.alerts.actionError(
-                "Failed to create new ${propName}",
+                "Failed to create new ${fileName}",
                     '${propName}',
                     response,
                 );
@@ -567,181 +632,187 @@ const __dirname = path.dirname(__filename);
 const defaultBasePath = path.join(__dirname, 'src', 'features');
 
 if (!fs.existsSync(defaultBasePath)) {
-    fs.mkdirSync(defaultBasePath, { recursive: true });
+  fs.mkdirSync(defaultBasePath, { recursive: true });
 }
 
 inquirer.prompt([
-    {
-        type: 'input',
-        name: 'folderName',
-        message: '¿Cuál es el nombre del folder?',
-    },
-    {
-        type: 'input',
-        name: 'fileName',
-        message: '¿Cuál es el nombre base para los archivos?',
-    },
-    {
-        type: 'input',
-        name: 'propName',
-        message: '¿Cuál es el nombre de la propiedad que representa los elementos?',
-    },
-    {
-        type: 'input',
-        name: 'sdkName',
-        message: '¿Cuál es el nombre del SDK?',
-    },
-    {
-        type: 'input',
-        name: 'props',
-        message: '¿Cuáles son los nombres de las propiedades (separe con comas)?',
-    }
+  {
+    type: 'input',
+    name: 'folderName',
+    message: '¿Cuál es el nombre del folder?',
+  },
+  {
+    type: 'input',
+    name: 'fileName',
+    message: '¿Cuál es el nombre base para los archivos?',
+  },
+  {
+    type: 'input',
+    name: 'propName',
+    message: '¿Cuál es el nombre de la propiedad que representa los elementos?',
+  },
+  {
+    type: 'input',
+    name: 'sdkName',
+    message: '¿Cuál es el nombre del SDK?',
+  },
+  // {
+  //   type: 'input',
+  //   name: 'props',
+  //   message: '¿Cuáles son los nombres de las propiedades (separe con comas)?',
+  // },
+  {
+    type: 'input',
+    name: 'props',
+    message: 'Copie las propiedades de clase de C# dentro de las {}?',
+  }
 ]).then(answers => {
-    const { folderName, fileName, propName, sdkName, props } = answers;
+  const { folderName, fileName, propName, sdkName, props } = answers;
 
-    const structure = {
-        '': [
-            `${fileName}Router.jsx`,
-            `${fileName}Service.js`,
-            `${fileName}DetailsForm.jsx`,
-            `${fileName}sList.jsx`,
-            `index.js`
-        ],
-        'controllers': [
-            `${fileName}CreateController.jsx`,
-            `${fileName}sListController.jsx`,
-            `${fileName}UpdateController.jsx`,
-            `index.js`
-        ],
-        'utils': [
-            `${fileName}Provider.jsx`,
-            `index.js`,
-            `with${fileName}.jsx`
-        ],
-        'views': [
-            `${fileName}CreateView.jsx`,
-            `${fileName}sListView.jsx`,
-            `${fileName}UpdateView.jsx`,
-            `index.js`
-        ],
-        'routing': [
-            `${fileName}Router.jsx`,
-        ]
-    };
+  const parsedProps = MapCSharpClass(props);
 
-    const createStructure = (basePath, structure) => {
-        for (const [dir, files] of Object.entries(structure)) {
-            const dirPath = path.join(basePath, dir);
-            if (!fs.existsSync(dirPath)) {
-                fs.mkdirSync(dirPath, { recursive: true });
-            }
+  const structure = {
+    '': [
+      `${fileName}Service.js`,
+      `${fileName}DetailsForm.jsx`,
+      `${fileName}sList.jsx`,
+      `index.js`
+    ],
+    'controllers': [
+      `${fileName}CreateController.jsx`,
+      `${fileName}sListController.jsx`,
+      `${fileName}UpdateController.jsx`,
+      `index.js`
+    ],
+    'utils': [
+      `${fileName}Provider.jsx`,
+      `index.js`,
+      `with${fileName}.jsx`
+    ],
+    'views': [
+      `${fileName}CreateView.jsx`,
+      `${fileName}sListView.jsx`,
+      `${fileName}UpdateView.jsx`,
+      `index.js`
+    ],
+    'routing': [
+      `${fileName}Router.jsx`,
+    ]
+  };
 
-            files.forEach(file => {
-                const filePath = path.join(dirPath, file);
-                let content = `// ${file} content`;
+  const createStructure = (basePath, structure) => {
+    for (const [dir, files] of Object.entries(structure)) {
+      const dirPath = path.join(basePath, dir);
+      if (!fs.existsSync(dirPath)) {
+        fs.mkdirSync(dirPath, { recursive: true });
+      }
 
-                if (file === `${fileName}sList.jsx`) {
-                    content = generateList(fileName, propName, props);
-                } else if (file === `${fileName}sListController.jsx`) {
-                    content = generateListControllerTemplate(fileName, propName, folderName);
-                } else if (file === `${fileName}UpdateController.jsx`) {
-                    content = generateUpdateController(fileName, propName, folderName);
-                } else if (file === `${fileName}CreateController.jsx`) {
-                    content = generateCreateController(fileName, propName, folderName);
-                } else if (file === `${fileName}Provider.jsx`) {
-                    content = generateProvider(fileName, propName);
-                } else if (file === `with${fileName}.jsx`) {
-                    content = generateHOC(fileName, propName);
-                } else if (file === `${fileName}CreateView.jsx`) {
-                    content = generateCreateView(fileName, folderName);
-                }
-                else if (file === `${fileName}sListView.jsx`) {
-                    content = generateListView(fileName, folderName);
-                }
-                else if (file === `${fileName}UpdateView.jsx`) {
-                    content = generateUpdateView(fileName, folderName, propName);
-                }
-                else if (file === `${fileName}Router.jsx`) {
-                    content = generateRouter(fileName, folderName, propName);
-                }
-                else if (file === `${fileName}Service.js`) {
-                    content = generateService(fileName, propName, sdkName);
-                }
-                else if (file === `${fileName}DetailsForm.jsx`) {
-                    content = generateDetailsForm(fileName, propName);
-                }
-                else if (file === `${fileName}Lookup.jsx`) {
-                    content = generateLookup(fileName, propName);
-                }
+      files.forEach(file => {
+        const filePath = path.join(dirPath, file);
+        let content = `// ${file} content`;
 
-                fs.writeFileSync(filePath, content.trim());
-            });
-
-            createIndexFile(dirPath);
+        if (file === `${fileName}sList.jsx`) {
+          content = generateList(fileName, propName, parsedProps);
+        } else if (file === `${fileName}sListController.jsx`) {
+          content = generateListControllerTemplate(fileName, propName, folderName);
+        } else if (file === `${fileName}UpdateController.jsx`) {
+          content = generateUpdateController(fileName, propName, folderName);
+        } else if (file === `${fileName}CreateController.jsx`) {
+          content = generateCreateController(fileName, propName, folderName);
+        } else if (file === `${fileName}Provider.jsx`) {
+          content = generateProvider(fileName, propName);
+        } else if (file === `with${fileName}.jsx`) {
+          content = generateHOC(fileName, propName);
+        } else if (file === `${fileName}CreateView.jsx`) {
+          content = generateCreateView(fileName, folderName);
         }
-        const routingPath = path.join(defaultBasePath, 'routing');
-        updateRouterFile(routingPath, fileName, propName);
-    };
+        else if (file === `${fileName}sListView.jsx`) {
+          content = generateListView(fileName, folderName);
+        }
+        else if (file === `${fileName}UpdateView.jsx`) {
+          content = generateUpdateView(fileName, folderName, propName);
+        }
+        else if (file === `${fileName}Router.jsx`) {
+          content = generateRouter(fileName, folderName, propName);
+        }
+        else if (file === `${fileName}sService.js`) {
+          content = generateService(fileName, propName, sdkName);
+        }
+        else if (file === `${fileName}DetailsForm.jsx`) {
+          content = generateDetailsForm(fileName, propName);
+        }
+        else if (file === `${fileName}Lookup.jsx`) {
+          content = generateLookup(fileName, propName);
+        }
 
-    const finalPath = path.join(defaultBasePath, folderName);
-    createStructure(finalPath, structure);
+        fs.writeFileSync(filePath, content.trim());
+      });
 
-    console.log(`¡Estructura de directorios y archivos creada con éxito en ${finalPath}!`);
+      createIndexFile(dirPath);
+    }
+    const routingPath = path.join(defaultBasePath, 'routing');
+    updateRouterFile(routingPath, fileName, propName);
+  };
+
+  const finalPath = path.join(defaultBasePath, folderName);
+  createStructure(finalPath, structure);
+
+  console.log(`¡Estructura de directorios y archivos creada con éxito en ${finalPath}!`);
 }).catch(error => {
-    console.error('Error al crear la estructura:', error);
+  console.error('Error al crear la estructura:', error);
 });
 
 function createIndexFile(directoryPath) {
-    const files = fs.readdirSync(directoryPath);
+  const files = fs.readdirSync(directoryPath);
 
-    const jsxFiles = files.filter(file => file.endsWith('.jsx'));
+  const jsxFiles = files.filter(file => file.endsWith('.jsx'));
 
-    const exportLines = jsxFiles.map(file => {
-        const fileNameWithoutExtension = path.basename(file, '.jsx');
-        return `export * from './${fileNameWithoutExtension}';`;
-    });
+  const exportLines = jsxFiles.map(file => {
+    const fileNameWithoutExtension = path.basename(file, '.jsx');
+    return `export * from './${fileNameWithoutExtension}';`;
+  });
 
-    const indexContent = exportLines.join('\n');
+  const indexContent = exportLines.join('\n');
 
-    const indexPath = path.join(directoryPath, 'index.js');
+  const indexPath = path.join(directoryPath, 'index.js');
 
-    fs.writeFileSync(indexPath, indexContent);
+  fs.writeFileSync(indexPath, indexContent);
 
-    console.log(`Archivo index.js creado en ${directoryPath}`);
+  console.log(`Archivo index.js creado en ${directoryPath}`);
 }
 
 function updateRouterFile(directoryPath, fileName, propName) {
-    const routerFilePath = path.join(directoryPath, 'Router.jsx');
+  const routerFilePath = path.join(directoryPath, 'Router.jsx');
 
-    if (!fs.existsSync(routerFilePath)) {
-        console.error(`El archivo Router.jsx no se encontró en ${directoryPath}`);
-        return;
-    }
+  if (!fs.existsSync(routerFilePath)) {
+    console.error(`El archivo Router.jsx no se encontró en ${directoryPath}`);
+    return;
+  }
 
-    let fileContent = fs.readFileSync(routerFilePath, 'utf-8');
-    const newImportLine = `import { ${fileName}Router } from './${fileName}Router';\n`;
-    const newRouteLine = `        <Route path="${propName}/*" element={<${fileName}Router />} />\n`;
-    const importInsertionPoint = 'import { BaseLayout } from';
-    const routeInsertionPoint = '<Route element={<BaseLayout />}>';
+  let fileContent = fs.readFileSync(routerFilePath, 'utf-8');
+  const newImportLine = `import { ${fileName}Router } from './${fileName}Router';\n`;
+  const newRouteLine = `        <Route path="${propName}/*" element={<${fileName}Router />} />\n`;
+  const importInsertionPoint = 'import { BaseLayout } from';
+  const routeInsertionPoint = '<Route element={<BaseLayout />}>';
 
-    const importIndex = fileContent.lastIndexOf(importInsertionPoint);
-    if (importIndex !== -1) {
-        const beforeImport = fileContent.slice(0, importIndex);
-        const afterImport = fileContent.slice(importIndex);
-        fileContent = `${beforeImport}${newImportLine}${afterImport}`;
-    } else {
-        console.error('No se encontró el punto de inyección para el import en Router.jsx');
-    }
+  const importIndex = fileContent.lastIndexOf(importInsertionPoint);
+  if (importIndex !== -1) {
+    const beforeImport = fileContent.slice(0, importIndex);
+    const afterImport = fileContent.slice(importIndex);
+    fileContent = `${beforeImport}${newImportLine}${afterImport}`;
+  } else {
+    console.error('No se encontró el punto de inyección para el import en Router.jsx');
+  }
 
-    if (fileContent.includes(routeInsertionPoint)) {
-        const [beforeInjection, afterInjection] = fileContent.split(routeInsertionPoint);
-        fileContent = `${beforeInjection}${routeInsertionPoint}\n${newRouteLine}${afterInjection}`;
-    } else {
-        console.error('No se encontró el punto de inyección para la ruta en Router.jsx');
-    }
+  if (fileContent.includes(routeInsertionPoint)) {
+    const [beforeInjection, afterInjection] = fileContent.split(routeInsertionPoint);
+    fileContent = `${beforeInjection}${routeInsertionPoint}\n${newRouteLine}${afterInjection}`;
+  } else {
+    console.error('No se encontró el punto de inyección para la ruta en Router.jsx');
+  }
 
-    fs.writeFileSync(routerFilePath, fileContent, 'utf-8');
+  fs.writeFileSync(routerFilePath, fileContent, 'utf-8');
 
-    console.log(`Línea inyectada correctamente en ${routerFilePath}`);
+  console.log(`Línea inyectada correctamente en ${routerFilePath}`);
 }
 
